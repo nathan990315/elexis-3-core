@@ -40,7 +40,7 @@ public class LiquibaseDBInitializer {
 	
 	public LiquibaseDBInitializer(DataSource dataSource, IDatabaseUpdateUi updateProgress){
 		this.dataSource = dataSource;
-		this.changelogXmlUrl = "/db/elexisdb_master_initial.xml";
+		this.changelogXmlUrl = "/db/elexisdb_master_initial.xml"; //$NON-NLS-1$
 		this.updateProgress = updateProgress;
 	}
 
@@ -59,11 +59,11 @@ public class LiquibaseDBInitializer {
 			if (existinglocks.length > 0) {
 				long timestamp = existinglocks[0].getLockGranted().getTime();
 				if (((System.currentTimeMillis() - timestamp) / 1000) > 14400) {
-					logger.warn("Releasing lock older than 4h");
+					logger.warn("Releasing lock older than 4h"); //$NON-NLS-1$
 					liquibase.forceReleaseLocks();
 				} else {
-					updateProgress.setMessage("Database locked: " + existinglocks[0].getLockedBy()
-						+ "@" + existinglocks[0].getLockGranted());
+					updateProgress.setMessage("Database locked: " + existinglocks[0].getLockedBy() //$NON-NLS-1$
+						+ "@" + existinglocks[0].getLockGranted()); //$NON-NLS-1$
 				}
 			}
 			if (updateProgress != null) {
@@ -72,29 +72,29 @@ public class LiquibaseDBInitializer {
 					@Override
 					public void willRun(ChangeSet changeSet, DatabaseChangeLog databaseChangeLog,
 						Database database, RunStatus runStatus){
-						updateProgress.setMessage("Init execute: " + changeSet.getDescription());
+						updateProgress.setMessage(Messages.LiquibaseDBInitializer_4 + changeSet.getDescription());
 					}
 				});
 			}
 			// only execute if the db does not exist already
 			// else sync the changelog as the db already exists
 			if (isFirstStart(connection)) {
-				logger.info("Initialize database [" + connection + "] with liquibase");
-				liquibase.update("");
+				logger.info("Initialize database [" + connection + "] with liquibase"); //$NON-NLS-1$ //$NON-NLS-2$
+				liquibase.update(""); //$NON-NLS-1$
 			} else {
-				logger.info("Synchronize liquibase log of database [" + connection + "]");
+				logger.info("Synchronize liquibase log of database [" + connection + "]"); //$NON-NLS-1$ //$NON-NLS-2$
 				try {
-					liquibase.changeLogSync("");
+					liquibase.changeLogSync(""); //$NON-NLS-1$
 				} catch (ValidationFailedException e) {
-					logger.info("Validation failed clear checksums and retry");
+					logger.info("Validation failed clear checksums and retry"); //$NON-NLS-1$
 					// removes current checksums from database, on next run checksums will be recomputed
 					liquibase.clearCheckSums();
-					liquibase.changeLogSync("");
+					liquibase.changeLogSync(""); //$NON-NLS-1$
 				}
 			}
 		} catch (LiquibaseException | SQLException e) {
 			// log and try to carry on
-			logger.warn("Exception on DB init.", e);
+			logger.warn("Exception on DB init.", e); //$NON-NLS-1$
 		} finally {
 			try {
 				if (liquibase != null) {
@@ -110,7 +110,7 @@ public class LiquibaseDBInitializer {
 	}
 	
 	private boolean isFirstStart(Connection connection){
-		return !getDbTables(connection).contains("CONFIG");
+		return !getDbTables(connection).contains("CONFIG"); //$NON-NLS-1$
 	}
 	
 	private static List<String> getDbTables(Connection con){
@@ -119,17 +119,17 @@ public class LiquibaseDBInitializer {
 		try {
 			DatabaseMetaData metaData = con.getMetaData();
 			
-			result = metaData.getTables(con.getCatalog(), null, "%", new String[] {
-				"TABLE"
+			result = metaData.getTables(con.getCatalog(), null, "%", new String[] { //$NON-NLS-1$
+				"TABLE" //$NON-NLS-1$
 			});
 			
 			while (result.next()) {
-				String tableName = result.getString("TABLE_NAME");
+				String tableName = result.getString("TABLE_NAME"); //$NON-NLS-1$
 				ret.add(tableName.toUpperCase());
 			}
 		} catch (SQLException ex) {
 			throw new IllegalStateException(
-				"An exception occured while trying to" + "analyse the database.", ex);
+				"An exception occured while trying to" + "analyse the database.", ex); //$NON-NLS-1$ //$NON-NLS-2$
 		} finally {
 			if (result != null) {
 				try {
