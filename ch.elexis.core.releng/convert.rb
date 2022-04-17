@@ -42,6 +42,7 @@ Useage: #{File.basename(__FILE__)} path_to_file
   destination will be in the same directory of the path_to_file
   # DocHandle_importErrorDirectoryText
 EOS
+  opt :to_csv   ,         "Create csv for all languages with entries for all #{@messages}", :default => false, :short => '-c'
 end
 
 Options = Optimist::with_standard_exception_handling parser do
@@ -52,6 +53,36 @@ end
 srcFile = ARGV.first
 
 require_relative 'common_l10n'
+
+def handle_messages()
+  search="./**/bundles/ch.elexis.core.l10n/src/ch/elexis/core/l10n/message*.properties"
+  files = Dir.glob(search)
+  unless files.size >0
+	puts "Could not find message via #{search}"
+	exit 1
+  end
+  languages = []
+  contents = {}
+  files.each do |file|
+	lang = File.basename(file).sub('messages', '').sub('.properties', '').sub('_','')
+	properties = JavaProperties.load(file)
+	lang =  :java if lang.size == 0
+	languages << lang
+	properties.each do | key, value |
+	  contents[key] ||= L10N_Cache_Entry.new(key, '', '', '', '', '')
+	  contents[key][lang.to_sym] = value
+	end
+  end
+  headers = [:key, :java, :de, :en, :fr, :it]
+  destFile = File.dirname(files.first) + '/messages.csv'
+  CSV.open(destFile, "w") do |csv|
+	csv << headers
+	contents.keys.each do |key|
+	  csv << contents[key]
+	end
+  end
+  puts "Wrote #{contents.size} entries to #{destFile}"
+end
 
 def handle_csv_source(srcFile)
   destFile = srcFile.sub(File.extname(srcFile),'.properties')  
@@ -70,6 +101,7 @@ def handle_csv_source(srcFile)
   end
 end
 
-handle_csv_source(srcFile) if File.exist?(srcFile) && /.csv/.match(srcFile)
+handle_messages if Options[:to_csv]
+handle_csv_source(srcFile) if srcFile && File.exist?(srcFile) && /.csv/.match(srcFile)
 
 

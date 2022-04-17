@@ -201,6 +201,7 @@ class L10N_Cache
 
   def self.db_get_entry(key)
 	entry =  L10N_Cache_Entry.new
+	entry[:key] = key
 	DB.execute( "select * from translations where key = '#{key}' " ) do
 	  |row|
 	  entry = L10N_Cache_Entry.new(row.first, 
@@ -221,6 +222,7 @@ class L10N_Cache
   def self.keys
 	ids = []
 	DB.execute( "select key from translations" ) { |row| ids << row.first }
+	ids.delete_if{ |x| x.nil?}
 	ids.sort
   end
 
@@ -230,6 +232,7 @@ class L10N_Cache
 	  DB.execute "insert into translations values ( ?, ? , ? , ? , ?, ?)", 
 		  entry[:key], entry[:java], entry[:de],
 		  entry[:en], entry[:fr], entry[:it]
+	  @@hasChanges = true
 	else
 	  @@hasChanges = true
 	  DB.execute "update translations set key = ?, java = ? , de = ? , en = ? , fr =  ?,  it = ? where key = '#{entry[:key]}'", 
@@ -456,7 +459,6 @@ class I18nInfo
 	   entry = L10N_Cache.db_get_entry(key)
       idx += 1
       puts "#{Time.now}: Analysing message #{idx} of #{size}" if idx % 500 == 0
-      next unless key
 	  binding.pry unless key.eql?(key.encode('utf-8'))
       # Ensure that we have a german translation (which is our default language)
 	  default = ''
@@ -467,6 +469,7 @@ class I18nInfo
 	  elsif entry[:en] && entry[:en].size > 0
 		first_entry = default = entry[:en]
 	  end
+	  default = entry[:java] if default.size == 0
       L10N_Cache::LANGUAGE_KEYS.each do |lang|
 		current_translation = L10N_Cache.get_translation(key, lang)
 		next if current_translation && current_translation.size > 0
@@ -579,7 +582,8 @@ public static final String BUNDLE_NAME = "ch.elexis.core.l10n.messages";
         puts "to_messages_properties skips project #{project_name} because its name matches 10n"
 		next
       end
-      keys = get_keys_from_messages_java(msg_java, main_dir).sort
+	  puts "Handling #{project_name}"
+      keys = get_keys_from_messages_java(msg_java, project_name).sort
       next if keys.size == 0
 	  patch_a_messages_java(msg_java, keys)
     end
@@ -613,10 +617,8 @@ public static final String BUNDLE_NAME = "ch.elexis.core.l10n.messages";
 	end
   end
   
-  def get_keys_from_messages_java(msg_java, main_dir)
-    project_name =  get_project_name(main_dir)
-    return [] unless project_name
-    lines = File.readlines(msg_java).collect{|line| to_utf(line) }
+  def get_keys_from_messages_java(msg_java, project_name)
+	lines = File.readlines(msg_java).collect{|line| to_utf(line) }
     keys = lines.collect{|line| m = L10N_Cache::KEY_REGEX_IN_MESSAGES.match(line); m[1] if m }.compact
     puts "#{project_name}: where #{msg_java} has #{keys.size} keys" if $VERBOSE
     keys
@@ -647,20 +649,14 @@ public static final String BUNDLE_NAME = "ch.elexis.core.l10n.messages";
   end
   def patch_a_messages_java(msg_java, keys)
     content = IO.read(msg_java)
-    bundleName = /.*BUNDLE_NAME.*/
-	oldInit = /static {.*NLS.initializeMessages.*}/m
-    new_header = "
-import org.eclipse.e4.core.services.nls.Message;
-public class Messages {
-"
-	content.sub!(oldInit, '')
-	content.sub!('extends NLS', '')
-	content.sub!(bundleName, '')
-	content.sub!('org.eclipse.osgi.util.NLS', 'org.eclipse.e4.core.services.nls.Message')
+	content.sub!(/^\s*(private|static) static final String BUNDLE_NAME.*/, '')
+	content.sub!(/^\s*static.*BUNDLE_NAME[^}]+}/m, '')
+	content.sub!(/^\s*private Messages[^}]+}/m, '')
+	content.sub!(/\s*extends\s+NLS\s+/, '')
     content.gsub!(/(\s*=\s*[\w\.]+)/, '')
 #    content.gsub!(/public static String/, 'public String')
-	content.gsub!(/String\s+(\w+)\w*;/, 'String \1 = ch.elexis.core.l10n.Messages.\1;');
-	puts "Patched #{msg_java}"
+	content.gsub!(/^\s*public\s+static\s+String\s+(\w+);/, '    public static String \1 = ch.elexis.core.l10n.Messages.\1;');
+#	content.gsub!(/String\s+(\w+)\w*;/, 'String \1 = ch.elexis.core.l10n.Messages.\1;');
     File.open(msg_java, 'w+') do |file|
       file.write content
     end
