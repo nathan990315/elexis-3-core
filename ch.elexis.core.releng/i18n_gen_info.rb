@@ -17,6 +17,7 @@
 # and https://rubygems.org/gems/java_properties or https://rubygems.org/gems/properties-ruby
 # nix-shell -p bundler sqlite rubyPackages.do_sqlite3 --command fish
 
+
 puts "It may take some time for bundler/inline to install the dependencies"
 require 'bundler/inline'
 
@@ -47,6 +48,9 @@ require 'logger'
 require "sqlite3"
 $stdout.sync = true
 
+ELEXIS_BASE = File.expand_path(File.dirname(File.dirname(__FILE__)))
+L10N_MESSAGES = Dir.glob("#{ELEXIS_BASE}/**/l10n/Messages.java").first
+
 DB_NAME = File.expand_path( "translations.DB")
 DB = SQLite3::Database.new DB_NAME
 # Create a table
@@ -60,11 +64,48 @@ rows = DB.execute <<-SQL
 	it varchar
   );
 SQL
+
+def create_t_uses
+rows2 = DB.execute <<-SQL
+  create table if not exists t_uses (
+	key varchar,
+	file varchar,
+	line integer
+  );
+SQL
+end
+
+def update_uses
+  DB.execute "drop table if exists t_uses;"
+  create_t_uses
+  files = Dir.glob('**/*.java')
+  puts files.size
+  DB.transaction
+  files.each do | file |
+	lines = File.readlines(file)
+#	puts "Analysing #{lines.size} lines for #{file}"
+	lines.each_with_index do | line,index |
+	  begin
+		next unless m = /.*Messages.(\w+)/.match(line)
+		DB.execute "insert into t_uses values ( ?, ? , ? )",  file, m[1], index
+	  rescue => error
+#		puts error
+#		binding.pry
+		0
+	  end
+	end
+
+  end
+  puts "Done with #{files.size} files"
+  DB.commit
+end
+
 if false # some tests
   DB.execute "insert into translations values ( 'key', 'myJava', 'myDe', 'meEn', 'myFr', 'myIt')"
   DB.execute( "select * from translations" ) { |row| p row }
   DB.execute( "delete from translations" )
   DB.execute( "select * from translations" ) { |row| p row }
+  DB.execute( "select * from t_uses" ) { |row| p row }
 end
 
 class GoogleTranslation
@@ -87,7 +128,7 @@ class GoogleTranslation
     unless value
       unless ENV['TRANSLATE_API_KEY']
         puts "MISSING TRANSLATE_API_KEY #{key} #{key.first.encoding}"
-        return
+        exit(3)
       end
       begin
         value = Translate.list_translations(what, target_language, source: source_language)
@@ -191,11 +232,13 @@ class L10N_Cache
 	entry = db_get_entry(key)
 	return entry ? entry[lang] : ''
 	return db_get_entry(key)
+	entries = []
 	entry = nil
-	DB.execute( "select * from translations where key = '#{key}' " ) do
+	DB.execute("select * from translations where #{lang.to_s} = '#{text}' ") do
 	  |row| 
 	  entry = L10N_Cache_Entry.new(row.first, 
 	  row[1], row[2], row[3], row[4], row[5])
+	  entries << entry
 	end
   end
 
@@ -210,6 +253,19 @@ class L10N_Cache
 	entry
   end
 
+  def self.search_text(text, lang)
+  	entry =  L10N_Cache_Entry.new
+	entry[lang.to_sym] = text
+	entries = []
+	DB.execute( "select * from translations where #{lang.to_s} = '#{text}' " ) do
+	  |row|
+	  entry = L10N_Cache_Entry.new(row.first, 
+	  row[1], row[2], row[3], row[4], row[5])
+	  entries << entry
+	end
+	entries
+  end
+  
   def self.set_translation(key, lang, value)
     value = value ? self.convert_to_real_utf(value.sub('\\ u00', '\\u00')) : ''
 	binding.pry if value.eql?('false')
@@ -217,6 +273,15 @@ class L10N_Cache
 	entry[lang] = value
 	self.db_insert_or_update(entry)
 	return
+  end
+
+  def self.uses
+	ids = {}
+	DB.execute( "select * from t_uses" ) do |row|
+	  ids[row.first] ||= 0
+	  ids[row.first] += 1
+	end
+	ids.sort
   end
 
   def self.keys
@@ -382,7 +447,7 @@ class I18nInfo
       line_nr += 1
       if analyse_one_message_line(project_name, language2, filename, line_nr, line) && language2.eql?(L10N_Cache::JavaLanguage)
       end
-    end
+    end if File.exist?(filename)
     puts "#{project_name} added #{filename}" if $VERBOSE
   end
 
@@ -527,6 +592,76 @@ class I18nInfo
         end
       end
     end
+  end
+
+  #
+  # analyses new messages in main_dir
+  # to see whether we have already in l10n occurences with the same
+  # text
+  def analyze_new(main_dir)
+	project_name =  get_project_name(main_dir)
+	existing_keys = get_keys_from_messages_java(L10N_MESSAGES, 'l10n')
+	update_uses
+	used_keys =  L10N_Cache.uses.clone
+	unused_keys = existing_keys.select{ |x| ! used_keys.index(x) }
+	keys = []
+	reported = []
+    Dir.glob("#{main_dir}/**/Messages.java").each do |msg_java|
+	  puts msg_java
+	  some_keys = get_keys_from_messages_java(msg_java, project_name).sort
+	   prop_file = msg_java.sub('Messages.java', 'messages.properties')
+	   analyse_one_message_file(project_name, prop_file)
+#	   puts "found #{some_keys.size} new keys in #{msg_java}"
+	   keys += some_keys
+	end
+	puts "found #{keys.size} new keys in #{project_name}"
+	already_present = existing_keys.select{ |x| keys.index(x)}
+	new_keys = keys.select{ |x| !already_present.index(x)}
+	new_keys.each do |key|
+	  text = L10N_Cache.db_get_entry(key)[:java]
+	  entries = L10N_Cache.search_text(text, :java)
+	  entries.delete_if{|x| x[:key].eql?(key) }
+	  next if reported.index(text)
+	  reported << text
+	  if entries.size > 1
+		puts "\nkey #{key}:\n   '#{text}'\n already present as  #{entries.collect{|x| x[:key]}.join("\n   ")}"
+	  end
+	end
+  end
+
+  STANDARDS = Hash.new 
+  STANDARDS[/"\\r"/] = "org.apache.commons.lang3.StringUtils.CR"
+  STANDARDS[/""/] = "org.apache.commons.lang3.StringUtils.EMPTY"
+  STANDARDS[/"\\n"/] = "org.apache.commons.lang3.StringUtils.LF"
+  STANDARDS[/" "/] = "org.apache.commons.lang3.StringUtils.SPACE"
+	    
+  def standardize_one_item(content, key, value)
+	m = key.match(content)
+	return false unless m
+	toImport = value.split('.')[0..-2].join('.')
+	if m 
+	   short = value.split('.')[-2..-1].join('.')
+	   content.gsub!(key, short)
+	   unless content.include?(toImport)
+		  content.sub!(/^(\s*import.*)$/, "\nimport #{toImport};\\1")
+	   end
+	end
+	true
+  end
+
+  def standardize(main_dir)
+	@has_changes = false
+    Dir.glob("#{main_dir}/**/*.java").each do |javafile|
+	  content = File.read(javafile)
+	  STANDARDS.each do |key, value |
+		@has_changes = true if standardize_one_item(content, key, value)
+	  end
+	  next unless @has_changes
+	  File.open(javafile, 'w') do |file|
+	   file.write(content)
+	  end
+	  puts "Patched #{javafile}"
+	end
   end
 
   def to_utf(string)
@@ -678,6 +813,8 @@ EOS
   opt :to_plugin_properties,     "Create plugin*.properties   for all languages from #{File.basename(DB_NAME)}", :default => false, :short => '-p'
   opt :patch_messages,     "Patch Messages.java to import all variable from ch.elexis.core.l10n.Messages", :default => false, :short => '-m'
   opt :emit_l10n, "Create Messages.java + properties for l10n", :default => false, :short => '-e'
+  opt :standardize, "Use some string constant from apache.commons in all java files in given subdir", :default => false, :short => '-s'
+  opt :analyze_new, "Get new keys and find already existing ones", :default => false, :short => "-n"
 end
 
 Options = Optimist::with_standard_exception_handling parser do
@@ -701,10 +838,13 @@ ARGV.each do |dir|
 	Dir.chdir saved_pwd
 	puts "Handling #{dir}"
 	i18n.to_db(dir) if Options[:to_db]
+	i18n.standardize(dir) if Options[:standardize]
 	i18n.to_messages_properties(dir)  if Options[:to_messages_properties]
 	i18n.to_plugin_properties(dir) if Options[:to_plugin_properties]
 	i18n.patch_messages_java(dir) if Options[:patch_messages]
 	i18n.emit_l10n if Options[:emit_l10n]
+	i18n.analyze_new(dir) if Options[:analyze_new]
 end
+	   # update_uses
 i18n.add_missing if Options[:add_missing]
 L10N_Cache.save_csv
