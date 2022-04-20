@@ -8,6 +8,38 @@
 	<artifactId>ch.elexis.core.p2site</artifactId>
 	<packaging>eclipse-repository</packaging>
 	<profiles>
+	  <profile>
+      <id>NIXOS</id> <!-- Patch Elexis for nixos -->
+      <activation>
+        <file>
+           <exists>/etc/NIXOS</exists>
+        </file>
+       </activation>
+      <build>
+		<plugins>
+		  <plugin>
+			<groupId>org.apache.maven.plugins</groupId>
+			<artifactId>maven-antrun-plugin</artifactId>
+			<version>1.8</version>
+			  <executions>
+				<execution>
+					<id>create-nixos-wrapper</id>
+					<phase>verify</phase>
+					<configuration>
+					<target>
+						<exec executable="nix-build" failonerror="false">
+						</exec>
+					  </target>
+					</configuration>
+					<goals>
+						<goal>run</goal>
+					</goals>
+				</execution>
+			  </executions>
+			</plugin>
+		  </plugins>
+	  </build>
+	</profile>
     <profile>
       <id>MATERIALIZE_PRODUCTS</id>
       <activation>
